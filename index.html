@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Кирпич Бишкека</title>
+<meta name="description" content="Кирпич на верёвочке показывает погоду в Бишкеке прямо сейчас">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧱</text></svg>">
+<style>
+  :root {
+    --sky-top: #6db7ff;
+    --sky-bottom: #cfe9ff;
+    --text: #12324d;
+    --card: rgba(255,255,255,.75);
+    --brick: #b5482f;
+    --brick-dark: #8e3422;
+    --mortar: #d9c3a6;
+    --swing: 3deg;
+    --swing-time: 4s;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--text);
+    background: linear-gradient(var(--sky-top), var(--sky-bottom));
+    background-color: var(--sky-bottom);
+    min-height: 100vh;
+    overflow: hidden;
+    transition: background .8s, color .8s;
+  }
+
+  /* ---- погода: цвета неба ---- */
+  body.night  { --sky-top:#0b1530; --sky-bottom:#24325a; --text:#e8eefc; --card:rgba(20,30,60,.7); }
+  body.cloudy { --sky-top:#8ea4b8; --sky-bottom:#d3dde6; }
+  body.fog    { --sky-top:#b9c0c6; --sky-bottom:#e3e6e8; }
+  body.rain, body.drizzle { --sky-top:#4f6578; --sky-bottom:#93a6b5; --text:#0e2233; }
+  body.storm  { --sky-top:#1d2531; --sky-bottom:#4a5563; --text:#eef2f7; --card:rgba(25,30,40,.7); }
+  body.snow   { --sky-top:#a9bfd4; --sky-bottom:#eef3f8; }
+  body.night.rain, body.night.drizzle, body.night.snow, body.night.cloudy, body.night.fog
+              { --sky-top:#141c2e; --sky-bottom:#3a4558; --text:#e8eefc; --card:rgba(20,30,50,.7); }
+  body.hot    { --sky-top:#ff9b4a; --sky-bottom:#ffe2a8; }
+
+  /* ---- верёвка и кирпич ---- */
+  .stage { position: absolute; inset: 0; display: flex; justify-content: center; }
+  .pendulum {
+    position: relative;
+    width: 260px;
+    transform-origin: 50% 0;
+    animation: swing var(--swing-time) ease-in-out infinite alternate;
+  }
+  @keyframes swing {
+    from { transform: rotate(calc(var(--swing) * -1)); }
+    to   { transform: rotate(var(--swing)); }
+  }
+  .rope {
+    width: 4px; height: 38vh; margin: 0 auto;
+    background: repeating-linear-gradient(170deg, #8a6a3c 0 5px, #b8925a 5px 10px);
+    border-radius: 2px;
+  }
+  .brick-wrap { position: relative; width: 260px; margin-top: -4px; }
+  svg.brick { display: block; width: 100%; height: auto; overflow: visible; }
+  .brick-body { fill: var(--brick); transition: fill 1s; }
+  .brick-side { fill: var(--brick-dark); transition: fill 1s; }
+  body.wet .brick-body { fill: #7a2c1c; }
+  body.wet .brick-side { fill: #551c11; }
+  .shine { opacity: 0; transition: opacity 1s; }
+  body.wet .shine { opacity: .55; }
+  .snowcap, .icicles { opacity: 0; transition: opacity 1s; }
+  body.snowy .snowcap { opacity: 1; }
+  body.frozen .icicles { opacity: 1; }
+  body.hot svg.brick { filter: drop-shadow(0 0 18px rgba(255,90,20,.8)); }
+  body.fog .pendulum { filter: blur(2px); }
+
+  /* капли, падающие с мокрого кирпича */
+  .drip {
+    position: absolute; top: 118px; width: 7px; height: 11px;
+    background: #9fd0ff; border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+    opacity: 0;
+  }
+  body.wet .drip { animation: drip 1.6s ease-in infinite; }
+  @keyframes drip {
+    0%   { transform: translateY(0) scale(.4); opacity: 0; }
+    15%  { transform: translateY(0) scale(1); opacity: 1; }
+    100% { transform: translateY(45vh); opacity: 0; }
+  }
+
+  /* ---- солнце, луна, облака ---- */
+  .sun, .moon {
+    position: absolute; top: 7vh; right: 10vw; width: 90px; height: 90px; border-radius: 50%;
+    opacity: 0; transition: opacity 1s;
+  }
+  .sun { background: #ffd84a; box-shadow: 0 0 60px 20px rgba(255,210,60,.6); }
+  .moon { background: #f2f0dc; box-shadow: inset -22px -6px 0 0 #c9c6ad, 0 0 40px 6px rgba(240,240,210,.35); }
+  body.show-sun .sun { opacity: 1; }
+  body.show-moon .moon { opacity: 1; }
+  .stars { position: absolute; inset: 0; opacity: 0; transition: opacity 1s; pointer-events: none; }
+  body.night.show-moon .stars { opacity: 1; }
+  .star { position: absolute; width: 2px; height: 2px; background: #fff; border-radius: 50%; }
+
+  .cloud {
+    position: absolute; height: 60px; border-radius: 60px; background: #fff;
+    opacity: 0; transition: opacity 1s;
+    animation: drift linear infinite;
+  }
+  .cloud::before, .cloud::after { content:""; position:absolute; background: inherit; border-radius: 50%; }
+  .cloud::before { width: 55%; height: 140%; top: -60%; left: 15%; }
+  .cloud::after  { width: 40%; height: 110%; top: -40%; right: 12%; }
+  body.show-clouds .cloud { opacity: .85; }
+  body.storm .cloud, body.rain .cloud { background: #6f7c89; }
+  body.night .cloud { background: #556073; }
+  @keyframes drift { from { transform: translateX(-30vw); } to { transform: translateX(130vw); } }
+
+  /* ---- осадки ---- */
+  .sky-fx { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .raindrop {
+    position: absolute; top: -20px; width: 2px; height: 18px;
+    background: linear-gradient(transparent, rgba(220,235,255,.9));
+    animation: fall linear infinite;
+  }
+  .flake {
+    position: absolute; top: -20px; color: #fff; font-size: 14px;
+    animation: snowfall linear infinite;
+    text-shadow: 0 0 3px rgba(0,0,0,.15);
+  }
+  @keyframes fall { to { transform: translate(-30px, 110vh); } }
+  @keyframes snowfall {
+    0% { transform: translate(0, 0) rotate(0); }
+    50% { transform: translate(25px, 55vh) rotate(180deg); }
+    100% { transform: translate(-10px, 110vh) rotate(360deg); }
+  }
+  .fog-layer {
+    position: absolute; inset: 0; opacity: 0; transition: opacity 1s;
+    background: linear-gradient(transparent 20%, rgba(255,255,255,.75) 60%, rgba(255,255,255,.9));
+  }
+  body.fog .fog-layer { opacity: 1; }
+  .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+  body.storm .flash { animation: flash 7s infinite; }
+  @keyframes flash {
+    0%, 89%, 93%, 100% { opacity: 0; }
+    90% { opacity: .8; } 91% { opacity: .1; } 92% { opacity: .6; }
+  }
+
+  /* ---- подпись ---- */
+  .panel {
+    position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%);
+    width: min(560px, calc(100% - 32px));
+    background: var(--card); backdrop-filter: blur(8px);
+    border-radius: 18px; padding: 16px 20px; text-align: center;
+    box-shadow: 0 6px 24px rgba(0,0,0,.12);
+    transition: background .8s;
+  }
+  .panel h1 { margin: 0 0 4px; font-size: clamp(22px, 5vw, 30px); }
+  .panel .info { margin: 0; font-size: 16px; opacity: .85; }
+  .panel .small { margin: 8px 0 0; font-size: 12px; opacity: .6; }
+  .try { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  .try button {
+    font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 999px;
+    border: 1px solid currentColor; background: transparent; color: inherit; cursor: pointer; opacity: .8;
+  }
+  .try button:hover { opacity: 1; }
+  .try button.active { background: var(--text); color: var(--sky-bottom); opacity: 1; }
+  @media (max-width: 480px) {
+    .pendulum, .brick-wrap { width: 190px; }
+    .drip { top: 86px; }
+    .rope { height: 30vh; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pendulum, .cloud, .raindrop, .flake, .drip { animation: none !important; }
+  }
+</style>
+</head>
+<body class="show-sun">
+  <div class="stars" id="stars"></div>
+  <div class="sun"></div>
+  <div class="moon"></div>
+  <div id="clouds"></div>
+
+  <div class="stage">
+    <div class="pendulum">
+      <div class="rope"></div>
+      <div class="brick-wrap">
+        <svg class="brick" viewBox="0 0 260 130" aria-label="Кирпич">
+          <!-- узел верёвки -->
+          <path d="M130 0 L 70 34 M130 0 L 190 34" stroke="#9a7845" stroke-width="4" fill="none"/>
+          <!-- верёвка обмотана вокруг кирпича -->
+          <!-- верхняя грань -->
+          <polygon class="brick-side" points="20,40 60,24 250,24 210,40" style="filter:brightness(1.25)"/>
+          <!-- боковая грань -->
+          <polygon class="brick-side" points="210,40 250,24 250,94 210,110"/>
+          <!-- передняя грань -->
+          <rect class="brick-body" x="20" y="40" width="190" height="70" rx="3"/>
+          <!-- дырки и неровности -->
+          <g fill="rgba(0,0,0,.18)">
+            <circle cx="50" cy="60" r="2"/><circle cx="90" cy="88" r="1.6"/>
+            <circle cx="150" cy="56" r="2.2"/><circle cx="185" cy="92" r="1.5"/>
+            <circle cx="120" cy="75" r="1.4"/><circle cx="70" cy="98" r="1.8"/>
+          </g>
+          <!-- верёвка поперёк -->
+          <rect x="108" y="40" width="10" height="70" fill="#a7844f"/>
+          <polygon points="108,40 118,40 152,24 142,24" fill="#c29d63"/>
+          <!-- блеск мокрого -->
+          <g class="shine" fill="#fff">
+            <ellipse cx="60" cy="52" rx="22" ry="4"/>
+            <ellipse cx="170" cy="50" rx="14" ry="3"/>
+            <ellipse cx="85" cy="64" rx="6" ry="2"/>
+          </g>
+          <!-- снежная шапка -->
+          <path class="snowcap" fill="#fff" d="M14 42 Q 30 14 64 18 L 252 18 Q 262 26 248 30 L 214 44 Q 190 52 170 44 Q 150 54 130 44 Q 100 54 80 45 Q 50 54 34 46 Q 16 50 14 42 Z"/>
+          <!-- сосульки -->
+          <g class="icicles" fill="#d8f0ff" stroke="#a9d6f5" stroke-width="1">
+            <polygon points="40,110 48,110 44,128"/>
+            <polygon points="75,110 85,110 80,136"/>
+            <polygon points="140,110 148,110 144,124"/>
+            <polygon points="175,110 185,110 180,132"/>
+          </g>
+        </svg>
+        <span class="drip" style="left:22%;animation-delay:0s"></span>
+        <span class="drip" style="left:55%;animation-delay:.7s"></span>
+        <span class="drip" style="left:76%;animation-delay:1.2s"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="sky-fx" id="fx"></div>
+  <div class="fog-layer"></div>
+  <div class="flash"></div>
+
+  <div class="panel">
+    <h1 id="title">Кирпич думает…</h1>
+    <p class="info" id="info">Узнаю погоду в Бишкеке</p>
+    <div class="try" id="try"></div>
+    <p class="small" id="small">Погода: open-meteo.com · обновляется каждые 10 минут</p>
+  </div>
+
+<script>
+  // Бишкек
+  const URL_API = "https://api.open-meteo.com/v1/forecast?latitude=42.87&longitude=74.59" +
+    "&current=temperature_2m,weather_code,wind_speed_10m,is_day,precipitation&timezone=Asia%2FBishkek";
+
+  // Что значит код погоды (WMO) — простыми словами
+  function describe(code) {
+    if (code === 0) return { kind: "clear", text: "ясно" };
+    if (code <= 2) return { kind: "partly", text: "немного облачно" };
+    if (code === 3) return { kind: "cloudy", text: "пасмурно" };
+    if (code === 45 || code === 48) return { kind: "fog", text: "туман" };
+    if (code >= 51 && code <= 57) return { kind: "drizzle", text: "моросит" };
+    if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return { kind: "rain", text: "дождь" };
+    if ((code >= 71 && code <= 77) || code === 85 || code === 86) return { kind: "snow", text: "снег" };
+    if (code >= 95) return { kind: "storm", text: "гроза" };
+    return { kind: "cloudy", text: "непонятная погода" };
+  }
+
+  // Готовые погоды для кнопок «Попробовать»
+  const DEMOS = {
+    "☀️ солнце":  { weather_code: 0,  temperature_2m: 22, wind_speed_10m: 5,  is_day: 1, precipitation: 0 },
+    "☁️ тучи":    { weather_code: 3,  temperature_2m: 12, wind_speed_10m: 10, is_day: 1, precipitation: 0 },
+    "🌧 дождь":   { weather_code: 63, temperature_2m: 9,  wind_speed_10m: 15, is_day: 1, precipitation: 2 },
+    "⛈ гроза":   { weather_code: 95, temperature_2m: 18, wind_speed_10m: 40, is_day: 1, precipitation: 5 },
+    "❄️ снег":    { weather_code: 73, temperature_2m: -3, wind_speed_10m: 8,  is_day: 1, precipitation: 1 },
+    "🥶 мороз":   { weather_code: 0,  temperature_2m: -15, wind_speed_10m: 3, is_day: 1, precipitation: 0 },
+    "🌫 туман":   { weather_code: 45, temperature_2m: 2,  wind_speed_10m: 2,  is_day: 1, precipitation: 0 },
+    "🔥 жара":    { weather_code: 0,  temperature_2m: 38, wind_speed_10m: 4,  is_day: 1, precipitation: 0 },
+    "🌬 ветер":   { weather_code: 2,  temperature_2m: 10, wind_speed_10m: 55, is_day: 1, precipitation: 0 },
+    "🌙 ночь":    { weather_code: 0,  temperature_2m: 8,  wind_speed_10m: 5,  is_day: 0, precipitation: 0 },
+  };
+
+  let real = null;      // настоящая погода
+  let demoName = null;  // выбранная кнопка
+
+  const $ = (id) => document.getElementById(id);
+  const fx = $("fx");
+
+  function makeRain(n) {
+    for (let i = 0; i < n; i++) {
+      const d = document.createElement("span");
+      d.className = "raindrop";
+      d.style.left = Math.random() * 110 + "%";
+      d.style.animationDuration = (0.5 + Math.random() * 0.4) + "s";
+      d.style.animationDelay = (-Math.random() * 2) + "s";
+      fx.appendChild(d);
+    }
+  }
+  function makeSnow(n) {
+    for (let i = 0; i < n; i++) {
+      const f = document.createElement("span");
+      f.className = "flake";
+      f.textContent = "❄";
+      f.style.left = Math.random() * 100 + "%";
+      f.style.fontSize = (8 + Math.random() * 14) + "px";
+      f.style.animationDuration = (5 + Math.random() * 6) + "s";
+      f.style.animationDelay = (-Math.random() * 10) + "s";
+      fx.appendChild(f);
+    }
+  }
+  function makeClouds() {
+    const box = $("clouds");
+    for (let i = 0; i < 5; i++) {
+      const c = document.createElement("div");
+      c.className = "cloud";
+      const w = 120 + Math.random() * 140;
+      c.style.width = w + "px";
+      c.style.top = (4 + Math.random() * 25) + "vh";
+      c.style.animationDuration = (40 + Math.random() * 40) + "s";
+      c.style.animationDelay = (-Math.random() * 80) + "s";
+      box.appendChild(c);
+    }
+  }
+  function makeStars() {
+    const box = $("stars");
+    for (let i = 0; i < 60; i++) {
+      const s = document.createElement("span");
+      s.className = "star";
+      s.style.left = Math.random() * 100 + "%";
+      s.style.top = Math.random() * 60 + "%";
+      s.style.opacity = 0.3 + Math.random() * 0.7;
+      box.appendChild(s);
+    }
+  }
+
+  function show(w, isDemo) {
+    const { kind, text } = describe(w.weather_code);
+    const t = Math.round(w.temperature_2m);
+    const wind = w.wind_speed_10m;
+    const night = w.is_day === 0;
+    const wet = ["rain", "drizzle", "storm"].includes(kind) || (w.precipitation > 0 && kind !== "snow");
+    const snowy = kind === "snow";
+    const frozen = t <= -5;
+    const hot = t >= 32 && !wet;
+
+    const cls = [kind];
+    if (kind === "partly") cls.push("show-clouds");
+    if (["cloudy", "rain", "drizzle", "storm", "snow"].includes(kind)) cls.push("show-clouds");
+    if (["clear", "partly"].includes(kind)) cls.push(night ? "show-moon" : "show-sun");
+    if (night) cls.push("night");
+    if (wet) cls.push("wet");
+    if (snowy) cls.push("snowy");
+    if (frozen) cls.push("frozen");
+    if (hot) cls.push("hot");
+    document.body.className = cls.join(" ");
+
+    // ветер раскачивает кирпич
+    const swing = Math.min(3 + wind * 0.6, 35);
+    const time = Math.max(4 - wind * 0.05, 1.2);
+    document.documentElement.style.setProperty("--swing", swing + "deg");
+    document.documentElement.style.setProperty("--swing-time", time + "s");
+
+    // осадки
+    fx.innerHTML = "";
+    if (kind === "drizzle") makeRain(40);
+    if (kind === "rain") makeRain(120);
+    if (kind === "storm") makeRain(180);
+    if (snowy) makeSnow(70);
+
+    // что сказать про кирпич
+    let state;
+    if (wet) state = "Кирпич мокрый 💧";
+    else if (snowy) state = "Кирпич в снегу ❄️";
+    else if (frozen) state = "Кирпич замёрз 🥶";
+    else if (hot) state = "Кирпич горячий 🔥";
+    else if (wind >= 35) state = "Кирпич болтается 🌬";
+    else if (kind === "fog") state = "Кирпич потерялся в тумане";
+    else if (night) state = "Кирпич спит 🌙";
+    else state = "Кирпич сухой";
+
+    const sign = t > 0 ? "+" : "";
+    $("title").textContent = state;
+    $("info").textContent = (isDemo ? "Пример: " : "Сейчас в Бишкеке ") +
+      `${text}, ${sign}${t}°, ветер ${Math.round(wind)} км/ч`;
+  }
+
+  function renderButtons() {
+    const box = $("try");
+    box.innerHTML = "";
+    const now = document.createElement("button");
+    now.textContent = "📍 сейчас в Бишкеке";
+    if (!demoName) now.classList.add("active");
+    now.onclick = () => { demoName = null; refresh(); renderButtons(); };
+    box.appendChild(now);
+    for (const name of Object.keys(DEMOS)) {
+      const b = document.createElement("button");
+      b.textContent = name;
+      if (demoName === name) b.classList.add("active");
+      b.onclick = () => { demoName = name; show(DEMOS[name], true); renderButtons(); };
+      box.appendChild(b);
+    }
+  }
+
+  function refresh() {
+    if (demoName) return;
+    if (real) show(real, false);
+  }
+
+  async function load() {
+    try {
+      const r = await fetch(URL_API);
+      if (!r.ok) throw new Error(r.status);
+      const data = await r.json();
+      real = data.current;
+      refresh();
+      const time = (data.current.time || "").split("T")[1] || "";
+      $("small").textContent = `Погода: open-meteo.com · обновлено в ${time} по Бишкеку`;
+    } catch (e) {
+      if (!demoName) {
+        $("title").textContent = "Кирпич не дозвонился до неба";
+        $("info").textContent = "Не получилось узнать погоду. Попробую ещё раз через минуту.";
+      }
+      setTimeout(load, 60 * 1000);
+    }
+  }
+
+  makeClouds();
+  makeStars();
+  renderButtons();
+  load();
+  setInterval(load, 10 * 60 * 1000);
+</script>
+</body>
+</html>
