@@ -160,6 +160,36 @@
   }
   .try button:hover { opacity: 1; }
   .try button.active { background: var(--text); color: var(--sky-bottom); opacity: 1; }
+  /* ---- выбор места ---- */
+  .place {
+    position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    width: min(560px, calc(100% - 32px)); z-index: 5;
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .place select, .place input {
+    font: inherit; font-size: 15px; color: var(--text);
+    background: var(--card); backdrop-filter: blur(8px);
+    border: 0; border-radius: 12px; padding: 9px 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.1);
+  }
+  .place select { flex: 1 1 170px; min-width: 0; }
+  .search { position: relative; flex: 2 1 220px; min-width: 0; }
+  .search input { width: 100%; }
+  .search input::placeholder { color: var(--text); opacity: .55; }
+  .results {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+    background: var(--card); backdrop-filter: blur(12px);
+    border-radius: 12px; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+    display: none; max-height: 50vh; overflow-y: auto;
+  }
+  .results.open { display: block; }
+  .results button {
+    display: block; width: 100%; text-align: left; font: inherit; font-size: 15px;
+    padding: 9px 12px; border: 0; background: transparent; color: inherit; cursor: pointer;
+  }
+  .results button:hover, .results button:focus { background: rgba(127,127,127,.2); outline: none; }
+  .results .muted { padding: 9px 12px; opacity: .6; font-size: 14px; }
+
   @media (max-width: 480px) {
     .pendulum, .brick-wrap { width: 190px; }
     .drip { top: 86px; }
@@ -170,7 +200,14 @@
   }
 </style>
 </head>
-<body class="show-sun">
+<body class="cloudy">
+  <div class="place">
+    <select id="country" aria-label="Страна"></select>
+    <div class="search">
+      <input id="q" type="search" placeholder="🔎 Найти город…" autocomplete="off" aria-label="Город">
+      <div class="results" id="results"></div>
+    </div>
+  </div>
   <div class="stars" id="stars"></div>
   <div class="sun"></div>
   <div class="moon"></div>
@@ -228,15 +265,50 @@
 
   <div class="panel">
     <h1 id="title">Кирпич думает…</h1>
-    <p class="info" id="info">Узнаю погоду в Бишкеке</p>
+    <p class="info" id="info">Узнаю погоду…</p>
     <div class="try" id="try"></div>
     <p class="small" id="small">Погода: open-meteo.com · обновляется каждые 10 минут</p>
   </div>
 
 <script>
-  // Бишкек
-  const URL_API = "https://api.open-meteo.com/v1/forecast?latitude=42.87&longitude=74.59" +
-    "&current=temperature_2m,weather_code,wind_speed_10m,is_day,precipitation&timezone=Asia%2FBishkek";
+  // ---- Страны: код, столица (с неё начинаем, когда выбрали страну) ----
+  const COUNTRIES = [
+    ["KG","Бишкек"],["KZ","Астана"],["RU","Москва"],["UZ","Ташкент"],["TJ","Душанбе"],
+    ["TM","Ашхабад"],["BY","Минск"],["UA","Киев"],["AM","Ереван"],["GE","Тбилиси"],
+    ["AZ","Баку"],["TR","Анкара"],["CN","Пекин"],["JP","Токио"],["KR","Сеул"],
+    ["IN","Нью-Дели"],["TH","Бангкок"],["AE","Абу-Даби"],["EG","Каир"],["ZA","Претория"],
+    ["GB","Лондон"],["FR","Париж"],["DE","Берлин"],["IT","Рим"],["ES","Мадрид"],
+    ["PL","Варшава"],["FI","Хельсинки"],["NO","Осло"],["SE","Стокгольм"],["IS","Рейкьявик"],
+    ["US","Вашингтон"],["CA","Оттава"],["MX","Мехико"],["BR","Бразилиа"],["AR","Буэнос-Айрес"],
+    ["AU","Канберра"],["NZ","Веллингтон"],["MN","Улан-Батор"],["ID","Джакарта"],["SA","Эр-Рияд"],
+  ];
+  const regionNames = new Intl.DisplayNames(["ru"], { type: "region" });
+  const flag = (cc) => cc ? cc.toUpperCase().replace(/./g, (c) => String.fromCodePoint(127397 + c.charCodeAt(0))) : "🌍";
+
+  const DEFAULT_PLACE = { name: "Бишкек", country: "Кыргызстан", cc: "KG", lat: 42.87, lon: 74.59 };
+  let place = DEFAULT_PLACE;
+  try {
+    const saved = JSON.parse(localStorage.getItem("brick-place") || "null");
+    if (saved && typeof saved.lat === "number") place = saved;
+  } catch (e) {}
+
+  function apiUrl(p) {
+    return `https://api.open-meteo.com/v1/forecast?latitude=${p.lat}&longitude=${p.lon}` +
+      "&current=temperature_2m,weather_code,wind_speed_10m,is_day,precipitation,rain,showers,snowfall" +
+      "&timezone=auto";
+  }
+
+  async function geocode(text, cc) {
+    let url = "https://geocoding-api.open-meteo.com/v1/search?count=8&language=ru&format=json&name=" +
+      encodeURIComponent(text);
+    if (cc) url += "&countryCode=" + cc;
+    const r = await fetch(url);
+    const d = await r.json();
+    return (d.results || []).map((x) => ({
+      name: x.name, country: x.country || regionNames.of(x.country_code || "") || "",
+      region: x.admin1 || "", cc: x.country_code, lat: x.latitude, lon: x.longitude,
+    }));
+  }
 
   // Что значит код погоды (WMO) — простыми словами
   function describe(code) {
@@ -323,8 +395,9 @@
     const t = Math.round(w.temperature_2m);
     const wind = w.wind_speed_10m;
     const night = w.is_day === 0;
-    const wet = ["rain", "drizzle", "storm"].includes(kind) || (w.precipitation > 0 && kind !== "snow");
-    const snowy = kind === "snow";
+    const snowy = kind === "snow" || w.snowfall > 0;
+    const wet = !snowy && (["rain", "drizzle", "storm"].includes(kind) ||
+      w.precipitation > 0 || w.rain > 0 || w.showers > 0);
     const frozen = t <= -5;
     const hot = t >= 32 && !wet;
 
@@ -365,7 +438,7 @@
 
     const sign = t > 0 ? "+" : "";
     $("title").textContent = state;
-    $("info").textContent = (isDemo ? "Пример: " : "Сейчас в Бишкеке ") +
+    $("info").textContent = (isDemo ? "Пример: " : `${flag(place.cc)} ${place.name}: `) +
       `${text}, ${sign}${t}°, ветер ${Math.round(wind)} км/ч`;
   }
 
@@ -373,7 +446,7 @@
     const box = $("try");
     box.innerHTML = "";
     const now = document.createElement("button");
-    now.textContent = "📍 сейчас в Бишкеке";
+    now.textContent = "📍 настоящая погода";
     if (!demoName) now.classList.add("active");
     now.onclick = () => { demoName = null; refresh(); renderButtons(); };
     box.appendChild(now);
@@ -391,24 +464,112 @@
     if (real) show(real, false);
   }
 
+  let loadId = 0;
+  let retryTimer = null;
   async function load() {
+    const my = ++loadId;
+    clearTimeout(retryTimer);
     try {
-      const r = await fetch(URL_API);
+      const r = await fetch(apiUrl(place));
       if (!r.ok) throw new Error(r.status);
       const data = await r.json();
+      if (my !== loadId) return; // пока грузили, выбрали другой город
       real = data.current;
       refresh();
       const time = (data.current.time || "").split("T")[1] || "";
-      $("small").textContent = `Погода: open-meteo.com · обновлено в ${time} по Бишкеку`;
+      $("small").textContent = `Погода: open-meteo.com · обновлено в ${time} по местному времени`;
     } catch (e) {
+      if (my !== loadId) return;
       if (!demoName) {
         $("title").textContent = "Кирпич не дозвонился до неба";
         $("info").textContent = "Не получилось узнать погоду. Попробую ещё раз через минуту.";
       }
-      setTimeout(load, 60 * 1000);
+      retryTimer = setTimeout(load, 60 * 1000);
     }
   }
 
+  // ---- выбор страны и города ----
+  const countrySel = $("country");
+  const q = $("q");
+  const results = $("results");
+
+  function fillCountries() {
+    const list = COUNTRIES.map(([cc, capital]) => ({ cc, capital, name: regionNames.of(cc) }))
+      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+    const all = document.createElement("option");
+    all.value = ""; all.textContent = "🌍 Все страны";
+    countrySel.appendChild(all);
+    for (const c of list) {
+      const o = document.createElement("option");
+      o.value = c.cc; o.textContent = `${flag(c.cc)} ${c.name}`;
+      o.dataset.capital = c.capital;
+      countrySel.appendChild(o);
+    }
+    if (place.cc && list.some((c) => c.cc === place.cc)) countrySel.value = place.cc;
+  }
+
+  function choose(p) {
+    place = p;
+    try { localStorage.setItem("brick-place", JSON.stringify(p)); } catch (e) {}
+    q.value = "";
+    q.placeholder = `🔎 ${p.name} — найти другой город…`;
+    results.classList.remove("open");
+    if ([...countrySel.options].some((o) => o.value === p.cc)) countrySel.value = p.cc;
+    demoName = null;
+    renderButtons();
+    $("title").textContent = "Кирпич думает…";
+    $("info").textContent = `Узнаю погоду: ${p.name}`;
+    load();
+  }
+
+  countrySel.onchange = async () => {
+    const opt = countrySel.selectedOptions[0];
+    if (!opt || !opt.value) { q.focus(); return; }
+    try {
+      const found = await geocode(opt.dataset.capital, opt.value);
+      if (found[0]) choose(found[0]);
+    } catch (e) {}
+  };
+
+  let searchTimer = null;
+  let searchId = 0;
+  q.oninput = () => {
+    clearTimeout(searchTimer);
+    const text = q.value.trim();
+    if (text.length < 2) { results.classList.remove("open"); return; }
+    searchTimer = setTimeout(async () => {
+      const my = ++searchId;
+      let found = [];
+      try {
+        found = await geocode(text, countrySel.value);
+        // в этой стране не нашли — ищем по всему миру
+        if (!found.length && countrySel.value) found = await geocode(text, "");
+      } catch (e) {}
+      if (my !== searchId) return;
+      results.innerHTML = "";
+      if (!found.length) {
+        results.innerHTML = '<div class="muted">Такого города не нашлось 🤔</div>';
+      }
+      for (const p of found) {
+        const b = document.createElement("button");
+        b.textContent = `${flag(p.cc)} ${p.name}` + (p.region && p.region !== p.name ? `, ${p.region}` : "") +
+          (p.country ? ` · ${p.country}` : "");
+        b.onclick = () => choose(p);
+        results.appendChild(b);
+      }
+      results.classList.add("open");
+    }, 300);
+  };
+  q.onkeydown = (e) => {
+    if (e.key === "Enter") { const first = results.querySelector("button"); if (first) first.click(); }
+    if (e.key === "Escape") results.classList.remove("open");
+  };
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".search")) results.classList.remove("open");
+  });
+
+  fillCountries();
+  q.placeholder = `🔎 ${place.name} — найти другой город…`;
   makeClouds();
   makeStars();
   renderButtons();
